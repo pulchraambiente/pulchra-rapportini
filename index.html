@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Pulchra Ambiente – Rapportini</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>* { box-sizing: border-box; margin: 0; padding: 0; }</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useRef, useEffect } = React;
+
+    // ─── CONFIG ───────────────────────────────────────────────────────────────
+    const SUPABASE_URL  = "https://kagscxeopvhsjlupvxem.supabase.co";
+    const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImthZ3NjeGVvcHZoc2psdXB2eGVtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxNTg0OTIsImV4cCI6MjA4ODczNDQ5Mn0.gsVaedf25JWqTmGNpjmgDwuxgnmhBrnQk7qPc4KXfaA";
+    const RESEND_KEY    = "re_ASL5GDiu_5AWTKvNtiw8bjQLhvwtCP5wx";
+    const EMAIL_FROM    = "onboarding@resend.dev";
+    const EMAIL_RESP    = "luca@pulchrambiente.it";
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const USERS = [
+      { username:"antonio.valentini", password:"pulchra2026", name:"Antonio Valentini", role:"capo" },
+      { username:"carmine.derosa",    password:"pulchra2026", name:"Carmine De Rosa",   role:"capo" },
+      { username:"admin",             password:"admin2026",   name:"Responsabile",      role:"admin" },
+    ];
+
+    const VIE = [
+      "Lungomare Cordella","Viale Dalmazia","Via Itaca","Via Sicilia","Via Malta","Via Ischia",
+      "Via Gargano","Via Cipro","Via Zante","Via Corfù","Via Albania","Via Cefalonia","Via Zara",
+      "Lungomare Duca degli Abruzzi","Via Tramontana","Via Austro","Via Ponente","Via Levante",
+      "Via Grecale","Via Scirocco","Via Libeccio"
+    ];
+    const ATTIVITA = [
+      "Pulizia e spazzamento strade e marciapiedi",
+      "Lavaggio superfici stradali",
+      "Rimozione sabbia dai marciapiedi",
+      "Sfalcio erbe spontanee sede stradale",
+      "Sfalcio bordi lungomare (sabbia/marciapiede)",
+      "Raccolta e smaltimento materiale vegetale",
+    ];
+    const MEZZI = ["Autospazzatrice","Automezzo lavaggio","Attrezzatura verde","Autocarro","Altro"];
+
+    const sb = (path, opts={}) => fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+      headers:{ "apikey":SUPABASE_ANON, "Authorization":`Bearer ${SUPABASE_ANON}`,
+        "Content-Type":"application/json", "Prefer":"return=representation", ...opts.headers },
+      ...opts
+    });
+
+    async function sendEmail(rapportino, capoName) {
+      try {
+        await fetch("/.netlify/functions/send-email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ rapportino, capoName })
+        });
+      } catch(e) { console.warn("Email:", e); }
+    }
+
+    async function uploadFoto(file, id) {
+      const ext = file.name.split(".").pop();
+      const path = `rapportini/${id}/${Date.now()}.${ext}`;
+      const buf = await file.arrayBuffer();
+      await fetch(`${SUPABASE_URL}/storage/v1/object/foto-rapportini/${path}`, {
+        method:"POST",
+        headers:{ "apikey":SUPABASE_ANON, "Authorization":`Bearer ${SUPABASE_ANON}`, "Content-Type": file.type },
+        body: buf
+      });
+      return `${SUPABASE_URL}/storage/v1/object/public/foto-rapportini/${path}`;
+    }
+
+    const fmtDate = () => new Date().toLocaleDateString("it-IT",{weekday:"long",day:"2-digit",month:"long",year:"numeric"});
+    const fmtDateShort = d => new Date(d).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric"});
+
+    function App() {
+      const [user, setUser] = useState(null);
+      const [login, setLogin] = useState({ u:"", p:"", err:"" });
+      function doLogin() {
+        const found = USERS.find(x => x.username===login.u && x.password===login.p);
+        if (found) setUser(found);
+        else setLogin(l => ({...l, err:"Credenziali non corrette."}));
+      }
+      if (!user) return <LoginScreen login={login} setLogin={setLogin} doLogin={doLogin} />;
+      if (user.role==="admin") return <AdminPanel user={user} onLogout={()=>setUser(null)} />;
+      return <RapportinoForm user={user} onLogout={()=>setUser(null)} />;
+    }
+
+    function LoginScreen({ login, setLogin, doLogin }) {
+      return (
+        <div style={{ minHeight:"100vh", background:"linear-gradient(135deg,#1a3a2a,#2d6a4f)", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"sans-serif" }}>
+          <div style={{ background:"white", borderRadius:20, padding:40, width:320, boxShadow:"0 20px 60px rgba(0,0,0,0.3)" }}>
+            <div style={{ textAlign:"center", marginBottom:28 }}>
+              <div style={{ fontSize:48 }}>🌿</div>
+              <div style={{ fontWeight:800, fontSize:22, color:"#1a3a2a" }}>Pulchra Ambiente</div>
+              <div style={{ color:"#888", fontSize:13, marginTop:4 }}>Gestione Rapportini</div>
+            </div>
+            <input placeholder="Username" value={login.u} onChange={e=>setLogin(l=>({...l,u:e.target.value}))}
+              style={{ width:"100%", padding:"11px 14px", borderRadius:10, border:"1.5px solid #ddd", marginBottom:10, fontSize:14 }} />
+            <input type="password" placeholder="Password" value={login.p}
+              onChange={e=>setLogin(l=>({...l,p:e.target.value}))}
+              onKeyDown={e=>e.key==="Enter"&&doLogin()}
+              style={{ width:"100%", padding:"11px 14px", borderRadius:10, border:"1.5px solid #ddd", marginBottom:6, fontSize:14 }} />
+            {login.err && <div style={{ color:"#c0392b", fontSize:13, marginBottom:8 }}>{login.err}</div>}
+            <button onClick={doLogin}
+              style={{ width:"100%", padding:13, background:"#1a3a2a", color:"white", border:"none", borderRadius:10, fontWeight:700, fontSize:15, cursor:"pointer" }}>
+              Accedi
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    function RapportinoForm({ user, onLogout }) {
+      const [form, setForm] = useState({ vie:[], attivita:[], oreInizio:"06:00", oreFine:"12:00", mezzi:[], note:"", fotoFiles:[], fotoPreview:[] });
+      const [status, setStatus] = useState("idle");
+      const [view, setView] = useState("form");
+      const [miei, setMiei] = useState([]);
+      const fileRef = useRef();
+
+      useEffect(() => { if(view==="storico") loadMiei(); }, [view]);
+
+      async function loadMiei() {
+        try {
+          const r = await sb(`rapportini?capo_squadra=eq.${encodeURIComponent(user.name)}&order=created_at.desc&limit=20`);
+          const d = await r.json(); setMiei(Array.isArray(d)?d:[]);
+        } catch { setMiei([]); }
+      }
+
+      function toggle(field, val) {
+        setForm(f => ({ ...f, [field]: f[field].includes(val) ? f[field].filter(x=>x!==val) : [...f[field],val] }));
+      }
+
+      function handleFoto(e) {
+        const files = Array.from(e.target.files);
+        const previews = files.map(f => ({ name:f.name, url:URL.createObjectURL(f), file:f }));
+        setForm(f => ({ ...f, fotoFiles:[...f.fotoFiles,...files], fotoPreview:[...f.fotoPreview,...previews] }));
+      }
+
+      async function submit() {
+        if (!form.vie.length) return alert("Seleziona almeno una via/zona.");
+        if (!form.attivita.length) return alert("Seleziona almeno un'attività.");
+        setStatus("sending");
+        try {
+          const record = {
+            data: new Date().toISOString().split("T")[0],
+            capo_squadra: user.name,
+            vie: form.vie, attivita: form.attivita,
+            ore_inizio: form.oreInizio, ore_fine: form.oreFine,
+            mezzi: form.mezzi, note: form.note, foto_urls: []
+          };
+          const res = await sb("rapportini", { method:"POST", body:JSON.stringify(record) });
+          const [saved] = await res.json();
+          if (form.fotoFiles.length && saved?.id) {
+            const urls = await Promise.all(form.fotoFiles.map(f => uploadFoto(f, saved.id)));
+            await sb(`rapportini?id=eq.${saved.id}`, { method:"PATCH", body:JSON.stringify({ foto_urls: urls }) });
+            record.foto_urls = urls;
+          }
+          await sendEmail(record, user.name);
+          setStatus("done");
+          setForm({ vie:[], attivita:[], oreInizio:"06:00", oreFine:"12:00", mezzi:[], note:"", fotoFiles:[], fotoPreview:[] });
+        } catch(e) { console.error(e); setStatus("error"); }
+      }
+
+      if (status==="done") return (
+        <div style={{ minHeight:"100vh", background:"#f4f6f3", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"sans-serif" }}>
+          <div style={{ background:"white", borderRadius:20, padding:40, textAlign:"center", maxWidth:320 }}>
+            <div style={{ fontSize:64 }}>✅</div>
+            <div style={{ fontWeight:800, fontSize:22, color:"#1a3a2a", marginTop:8 }}>Rapportino inviato!</div>
+            <div style={{ color:"#666", marginTop:8, fontSize:14 }}>Il responsabile ha ricevuto la notifica via email.</div>
+            <button onClick={()=>setStatus("idle")} style={{ marginTop:20, width:"100%", padding:12, background:"#1a3a2a", color:"white", border:"none", borderRadius:10, fontWeight:700, fontSize:15, cursor:"pointer" }}>Nuovo rapportino</button>
+          </div>
+        </div>
+      );
+
+      return (
+        <div style={{ minHeight:"100vh", background:"#f4f6f3", fontFamily:"sans-serif" }}>
+          <Header name={user.name} view={view} setView={setView} onLogout={onLogout} tabs={[{k:"form",l:"📋 Rapportino"},{k:"storico",l:"📂 I miei"}]} />
+          <div style={{ maxWidth:600, margin:"0 auto", padding:"16px 16px 60px" }}>
+            {view==="storico" ? <Storico rows={miei} /> : (
+              <>
+                <Card><b style={{color:"#1a3a2a"}}>📅 {fmtDate()}</b> · 👷 {user.name}</Card>
+                <Section title="📍 Vie / Zone lavorate">
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                    {VIE.map(v=><Chip key={v} label={v} active={form.vie.includes(v)} onClick={()=>toggle("vie",v)} />)}
+                  </div>
+                </Section>
+                <Section title="✅ Attività svolte">
+                  {ATTIVITA.map(a=>(
+                    <label key={a} style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10, cursor:"pointer" }}>
+                      <input type="checkbox" checked={form.attivita.includes(a)} onChange={()=>toggle("attivita",a)} style={{ width:18, height:18, accentColor:"#1a3a2a" }} />
+                      <span style={{ fontSize:14 }}>{a}</span>
+                    </label>
+                  ))}
+                </Section>
+                <Section title="⏰ Ore di lavoro">
+                  <div style={{ display:"flex", gap:12 }}>
+                    {[["oreInizio","Inizio"],["oreFine","Fine"]].map(([k,l])=>(
+                      <div key={k} style={{ flex:1 }}>
+                        <div style={{ fontSize:12, color:"#888", marginBottom:4 }}>{l}</div>
+                        <input type="time" value={form[k]} onChange={e=>setForm(f=>({...f,[k]:e.target.value}))}
+                          style={{ width:"100%", padding:"9px 10px", borderRadius:8, border:"1.5px solid #ddd", fontSize:15 }} />
+                      </div>
+                    ))}
+                  </div>
+                </Section>
+                <Section title="🚛 Mezzi utilizzati">
+                  <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+                    {MEZZI.map(m=><Chip key={m} label={m} active={form.mezzi.includes(m)} onClick={()=>toggle("mezzi",m)} />)}
+                  </div>
+                </Section>
+                <Section title="📷 Foto allegate">
+                  <button onClick={()=>fileRef.current.click()}
+                    style={{ padding:"9px 16px", background:"#f0f4f0", border:"2px dashed #aac4aa", borderRadius:8, cursor:"pointer", color:"#1a3a2a", fontWeight:600, fontSize:13 }}>
+                    + Aggiungi foto
+                  </button>
+                  <input ref={fileRef} type="file" accept="image/*" multiple style={{ display:"none" }} onChange={handleFoto} />
+                  {form.fotoPreview.length>0 && (
+                    <div style={{ display:"flex", gap:8, marginTop:10, flexWrap:"wrap" }}>
+                      {form.fotoPreview.map((f,i)=>(
+                        <div key={i} style={{ position:"relative" }}>
+                          <img src={f.url} alt={f.name} style={{ width:76, height:76, objectFit:"cover", borderRadius:8 }} />
+                          <button onClick={()=>setForm(fm=>({...fm, fotoPreview:fm.fotoPreview.filter((_,j)=>j!==i), fotoFiles:fm.fotoFiles.filter((_,j)=>j!==i)}))}
+                            style={{ position:"absolute", top:-6, right:-6, background:"#c0392b", color:"white", border:"none", borderRadius:"50%", width:20, height:20, cursor:"pointer", fontSize:13, padding:0, lineHeight:"20px" }}>×</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Section>
+                <Section title="⚠️ Note / Anomalie">
+                  <textarea value={form.note} onChange={e=>setForm(f=>({...f,note:e.target.value}))}
+                    placeholder="Descrivi eventuali problemi, anomalie o osservazioni..."
+                    rows={3} style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1.5px solid #ddd", fontSize:14, resize:"vertical", fontFamily:"sans-serif" }} />
+                </Section>
+                {status==="error" && <div style={{ background:"#fdecea", color:"#c0392b", borderRadius:8, padding:12, marginBottom:12, fontSize:13 }}>⚠️ Errore durante l'invio. Controlla la connessione.</div>}
+                <button onClick={submit} disabled={status==="sending"}
+                  style={{ width:"100%", padding:15, background:status==="sending"?"#aaa":"#1a3a2a", color:"white", border:"none", borderRadius:12, fontWeight:700, fontSize:16, cursor:status==="sending"?"not-allowed":"pointer" }}>
+                  {status==="sending" ? "⏳ Invio in corso..." : "📤 Invia Rapportino"}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function AdminPanel({ user, onLogout }) {
+      const [rows, setRows] = useState([]);
+      const [loading, setLoading] = useState(true);
+      const [view, setView] = useState("dashboard");
+      const [selected, setSelected] = useState(null);
+      const [filters, setFilters] = useState({ capo:"", data:"", via:"" });
+
+      useEffect(() => { load(); }, []);
+
+      async function load() {
+        setLoading(true);
+        try {
+          const r = await sb("rapportini?order=created_at.desc&limit=200");
+          const d = await r.json(); setRows(Array.isArray(d)?d:[]);
+        } catch { setRows([]); }
+        setLoading(false);
+      }
+
+      const filtered = rows.filter(r =>
+        (!filters.capo || r.capo_squadra?.toLowerCase().includes(filters.capo.toLowerCase())) &&
+        (!filters.data || r.data === filters.data) &&
+        (!filters.via  || r.vie?.some(v=>v.toLowerCase().includes(filters.via.toLowerCase())))
+      );
+
+      const totOre = filtered.reduce((acc,r) => {
+        const [h1,m1] = (r.ore_inizio||"0:0").split(":").map(Number);
+        const [h2,m2] = (r.ore_fine||"0:0").split(":").map(Number);
+        return acc + (h2*60+m2 - h1*60-m1);
+      }, 0);
+
+      const hasAnomalie = filtered.filter(r => r.note && r.note.trim() !== "").length;
+      const byCapo = USERS.filter(u=>u.role==="capo").map(u=>({ name:u.name, count:rows.filter(r=>r.capo_squadra===u.name).length }));
+
+      if (selected) return <DettaglioRapportino r={selected} onBack={()=>setSelected(null)} />;
+
+      return (
+        <div style={{ minHeight:"100vh", background:"#f0f2f5", fontFamily:"sans-serif" }}>
+          <Header name={`Admin – ${user.name}`} view={view} setView={setView} onLogout={onLogout}
+            tabs={[{k:"dashboard",l:"📊 Dashboard"},{k:"lista",l:"📋 Rapportini"},{k:"anomalie",l:"⚠️ Anomalie"}]} />
+          <div style={{ maxWidth:900, margin:"0 auto", padding:"16px 16px 60px" }}>
+            {view==="dashboard" && (
+              <>
+                <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:12, marginBottom:16 }}>
+                  {[
+                    { icon:"📋", label:"Totale rapportini", val:rows.length, color:"#1a3a2a" },
+                    { icon:"⏱️", label:"Ore totali lavorate", val:`${Math.floor(totOre/60)}h ${totOre%60}m`, color:"#2980b9" },
+                    { icon:"⚠️", label:"Con anomalie", val:hasAnomalie, color:"#e67e22" },
+                    { icon:"📅", label:"Oggi", val:rows.filter(r=>r.data===new Date().toISOString().split("T")[0]).length, color:"#27ae60" },
+                  ].map(s=>(
+                    <div key={s.label} style={{ background:"white", borderRadius:12, padding:16, boxShadow:"0 2px 8px rgba(0,0,0,.06)" }}>
+                      <div style={{ fontSize:28 }}>{s.icon}</div>
+                      <div style={{ fontSize:26, fontWeight:800, color:s.color, marginTop:4 }}>{s.val}</div>
+                      <div style={{ fontSize:12, color:"#888", marginTop:2 }}>{s.label}</div>
+                    </div>
+                  ))}
+                </div>
+                <Section title="👷 Rapportini per capo squadra">
+                  {byCapo.map(c=>(
+                    <div key={c.name} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 0", borderBottom:"1px solid #f0f0f0" }}>
+                      <span style={{ fontSize:14 }}>👤 {c.name}</span>
+                      <span style={{ background:"#1a3a2a", color:"white", borderRadius:20, padding:"3px 14px", fontSize:13, fontWeight:700 }}>{c.count}</span>
+                    </div>
+                  ))}
+                </Section>
+                <Section title="📋 Ultimi 5 rapportini">
+                  {rows.slice(0,5).map(r=><RowCard key={r.id} r={r} onClick={()=>setSelected(r)} />)}
+                </Section>
+              </>
+            )}
+            {view==="lista" && (
+              <>
+                <div style={{ background:"white", borderRadius:12, padding:14, marginBottom:12, display:"flex", gap:10, flexWrap:"wrap" }}>
+                  <input placeholder="🔍 Capo squadra" value={filters.capo} onChange={e=>setFilters(f=>({...f,capo:e.target.value}))}
+                    style={{ padding:"8px 12px", borderRadius:8, border:"1.5px solid #ddd", fontSize:13, minWidth:140 }} />
+                  <input type="date" value={filters.data} onChange={e=>setFilters(f=>({...f,data:e.target.value}))}
+                    style={{ padding:"8px 12px", borderRadius:8, border:"1.5px solid #ddd", fontSize:13 }} />
+                  <input placeholder="🔍 Via" value={filters.via} onChange={e=>setFilters(f=>({...f,via:e.target.value}))}
+                    style={{ padding:"8px 12px", borderRadius:8, border:"1.5px solid #ddd", fontSize:13, minWidth:140 }} />
+                  <button onClick={()=>setFilters({capo:"",data:"",via:""})}
+                    style={{ padding:"8px 14px", borderRadius:8, border:"1px solid #ddd", background:"#f5f5f5", cursor:"pointer", fontSize:13 }}>Reset</button>
+                </div>
+                {loading ? <div style={{ textAlign:"center", padding:40, color:"#888" }}>⏳ Caricamento...</div>
+                  : filtered.length===0 ? <div style={{ textAlign:"center", padding:40, color:"#888" }}>Nessun rapportino trovato.</div>
+                  : filtered.map(r=><RowCard key={r.id} r={r} onClick={()=>setSelected(r)} />)}
+              </>
+            )}
+            {view==="anomalie" && (
+              <>
+                <div style={{ background:"#fff8e1", border:"1px solid #f9ca24", borderRadius:12, padding:14, marginBottom:14, fontSize:14, color:"#856404" }}>
+                  ⚠️ Sono presenti <strong>{hasAnomalie}</strong> rapportini con anomalie segnalate.
+                </div>
+                {filtered.filter(r=>r.note&&r.note.trim()!=="").map(r=>(
+                  <div key={r.id} onClick={()=>setSelected(r)} style={{ background:"white", borderRadius:12, padding:16, marginBottom:10, cursor:"pointer", borderLeft:"4px solid #e67e22" }}>
+                    <div style={{ display:"flex", justifyContent:"space-between" }}>
+                      <strong style={{ color:"#1a3a2a" }}>{fmtDateShort(r.data)}</strong>
+                      <span style={{ fontSize:12, color:"#888" }}>{r.capo_squadra}</span>
+                    </div>
+                    <div style={{ marginTop:8, fontSize:14, color:"#e67e22" }}>⚠️ {r.note}</div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function DettaglioRapportino({ r, onBack }) {
+      return (
+        <div style={{ minHeight:"100vh", background:"#f0f2f5", fontFamily:"sans-serif" }}>
+          <div style={{ background:"#1a3a2a", color:"white", padding:"14px 20px", display:"flex", alignItems:"center", gap:12 }}>
+            <button onClick={onBack} style={{ background:"rgba(255,255,255,.15)", border:"none", color:"white", borderRadius:8, padding:"6px 12px", cursor:"pointer", fontSize:13 }}>← Indietro</button>
+            <span style={{ fontWeight:700 }}>Dettaglio Rapportino</span>
+          </div>
+          <div style={{ maxWidth:600, margin:"0 auto", padding:16 }}>
+            {[
+              ["📅 Data", fmtDateShort(r.data)],
+              ["👷 Capo Squadra", r.capo_squadra],
+              ["⏰ Orario", `${r.ore_inizio} – ${r.ore_fine}`],
+              ["📍 Vie lavorate", r.vie?.join(", ")],
+              ["✅ Attività", r.attivita?.join(" · ")],
+              ["🚛 Mezzi", r.mezzi?.join(", ")],
+              ["⚠️ Note", r.note||"–"],
+            ].map(([l,v])=>(
+              <div key={l} style={{ background:"white", borderRadius:10, padding:"12px 16px", marginBottom:8 }}>
+                <div style={{ fontSize:12, color:"#888", marginBottom:3 }}>{l}</div>
+                <div style={{ fontSize:14, color:"#222", fontWeight:500 }}>{v}</div>
+              </div>
+            ))}
+            {r.foto_urls?.length>0 && (
+              <Section title={`📷 Foto (${r.foto_urls.length})`}>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
+                  {r.foto_urls.map((url,i)=>(
+                    <a key={i} href={url} target="_blank" rel="noreferrer">
+                      <img src={url} alt={`foto-${i}`} style={{ width:100, height:100, objectFit:"cover", borderRadius:8 }} />
+                    </a>
+                  ))}
+                </div>
+              </Section>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function Storico({ rows }) {
+      return rows.length===0
+        ? <div style={{ background:"white", borderRadius:12, padding:24, textAlign:"center", color:"#999" }}>Nessun rapportino ancora.</div>
+        : rows.map(r=><RowCard key={r.id} r={r} />);
+    }
+
+    function RowCard({ r, onClick }) {
+      return (
+        <div onClick={onClick} style={{ background:"white", borderRadius:12, padding:"14px 16px", marginBottom:10, cursor:onClick?"pointer":"default", borderLeft: r.note ? "4px solid #e67e22" : "4px solid #1a3a2a", boxShadow:"0 2px 8px rgba(0,0,0,.06)" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:6 }}>
+            <strong style={{ color:"#1a3a2a", fontSize:14 }}>{fmtDateShort(r.data)}</strong>
+            <span style={{ fontSize:12, color:"#888" }}>{r.ore_inizio}–{r.ore_fine}</span>
+          </div>
+          <div style={{ fontSize:13, color:"#555" }}>👤 {r.capo_squadra}</div>
+          <div style={{ fontSize:13, color:"#555", marginTop:3 }}>📍 {r.vie?.slice(0,3).join(", ")}{r.vie?.length>3?` +${r.vie.length-3}`:""}</div>
+          {r.note && <div style={{ fontSize:13, color:"#e67e22", marginTop:4 }}>⚠️ {r.note}</div>}
+          {r.foto_urls?.length>0 && <div style={{ fontSize:12, color:"#888", marginTop:4 }}>📷 {r.foto_urls.length} foto</div>}
+        </div>
+      );
+    }
+
+    function Header({ name, view, setView, onLogout, tabs }) {
+      return (
+        <div style={{ background:"#1a3a2a", color:"white", padding:"12px 16px", fontFamily:"sans-serif" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", maxWidth:900, margin:"0 auto" }}>
+            <div>
+              <div style={{ fontWeight:700, fontSize:15 }}>🌿 Pulchra Ambiente</div>
+              <div style={{ fontSize:11, opacity:.7 }}>{name}</div>
+            </div>
+            <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+              {tabs.map(t=>(
+                <button key={t.k} onClick={()=>setView(t.k)}
+                  style={{ background:view===t.k?"rgba(255,255,255,.2)":"transparent", color:"white", border:"1px solid rgba(255,255,255,.25)", borderRadius:7, padding:"6px 11px", cursor:"pointer", fontSize:12, fontWeight:view===t.k?700:400 }}>
+                  {t.l}
+                </button>
+              ))}
+              <button onClick={onLogout} style={{ background:"transparent", color:"white", border:"1px solid rgba(255,255,255,.25)", borderRadius:7, padding:"6px 10px", cursor:"pointer", fontSize:12 }}>Esci</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function Section({ title, children }) {
+      return (
+        <div style={{ background:"white", borderRadius:12, padding:16, marginBottom:12, boxShadow:"0 2px 8px rgba(0,0,0,.06)" }}>
+          <div style={{ fontWeight:700, color:"#1a3a2a", marginBottom:12, fontSize:14 }}>{title}</div>
+          {children}
+        </div>
+      );
+    }
+
+    function Card({ children }) {
+      return <div style={{ background:"white", borderRadius:12, padding:"12px 16px", marginBottom:12, fontSize:14, color:"#444", boxShadow:"0 2px 8px rgba(0,0,0,.06)" }}>{children}</div>;
+    }
+
+    function Chip({ label, active, onClick }) {
+      return (
+        <button onClick={onClick}
+          style={{ padding:"6px 12px", borderRadius:20, border:active?"2px solid #1a3a2a":"1.5px solid #ddd",
+            background:active?"#1a3a2a":"white", color:active?"white":"#444",
+            fontSize:12, cursor:"pointer", fontWeight:active?700:400 }}>
+          {label}
+        </button>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
