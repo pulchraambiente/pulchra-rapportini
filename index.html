@@ -246,22 +246,157 @@
       );
     }
 
+    function calcOre(rows) {
+      return rows.reduce((acc,r) => {
+        const [h1,m1] = (r.ore_inizio||"0:0").split(":").map(Number);
+        const [h2,m2] = (r.ore_fine||"0:0").split(":").map(Number);
+        return acc + (h2*60+m2 - h1*60-m1);
+      }, 0);
+    }
+
+    function getWeekRange(offset=0) {
+      const now = new Date();
+      const day = now.getDay()||7;
+      const mon = new Date(now); mon.setDate(now.getDate()-day+1+offset*7);
+      const sun = new Date(mon); sun.setDate(mon.getDate()+6);
+      return { from: mon.toISOString().split("T")[0], to: sun.toISOString().split("T")[0],
+        label: `${mon.toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit"})} – ${sun.toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric"})}` };
+    }
+
+    function getMonthRange(offset=0) {
+      const now = new Date();
+      const y = now.getFullYear(), m = now.getMonth()+offset;
+      const from = new Date(y, m, 1).toISOString().split("T")[0];
+      const to   = new Date(y, m+1, 0).toISOString().split("T")[0];
+      const label = new Date(y,m,1).toLocaleDateString("it-IT",{month:"long",year:"numeric"});
+      return { from, to, label };
+    }
+
+    function buildReport(rows) {
+      const oreMin = calcOre(rows);
+      const oreStr = `${Math.floor(oreMin/60)}h ${oreMin%60}m`;
+      const byCapo = USERS.filter(u=>u.role==="capo").map(u=>{
+        const sub = rows.filter(r=>r.capo_squadra===u.name);
+        const min = calcOre(sub);
+        return { name:u.name, count:sub.length, ore:`${Math.floor(min/60)}h ${min%60}m` };
+      });
+      const vieCount = {};
+      rows.forEach(r=>r.vie?.forEach(v=>{ vieCount[v]=(vieCount[v]||0)+1; }));
+      const vieSort = Object.entries(vieCount).sort((a,b)=>b[1]-a[1]);
+      const attCount = {};
+      rows.forEach(r=>r.attivita?.forEach(a=>{ attCount[a]=(attCount[a]||0)+1; }));
+      const attSort = Object.entries(attCount).sort((a,b)=>b[1]-a[1]);
+      const anomalie = rows.filter(r=>r.note&&r.note.trim()!=="");
+      return { oreStr, byCapo, vieSort, attSort, anomalie, total:rows.length };
+    }
+
+    function ReportView({ rows, periodo, label, onSendEmail }) {
+      const r = buildReport(rows);
+      if (!rows.length) return (
+        <div style={{ background:"white", borderRadius:12, padding:24, textAlign:"center", color:"#999" }}>
+          Nessun rapportino nel periodo selezionato.
+        </div>
+      );
+      return (
+        <div>
+          <div style={{ background:"#1a3a2a", color:"white", borderRadius:12, padding:16, marginBottom:12 }}>
+            <div style={{ fontWeight:800, fontSize:16 }}>📊 Report {periodo} — {label}</div>
+            <div style={{ fontSize:13, opacity:.8, marginTop:4 }}>{r.total} rapportini · {r.oreStr} totali</div>
+          </div>
+          <Section title="👷 Ore per capo squadra">
+            {r.byCapo.map(c=>(
+              <div key={c.name} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 0", borderBottom:"1px solid #f5f5f5" }}>
+                <span style={{ fontSize:14 }}>👤 {c.name}</span>
+                <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+                  <span style={{ fontSize:13, color:"#888" }}>{c.count} rapportini</span>
+                  <span style={{ background:"#1a3a2a", color:"white", borderRadius:20, padding:"3px 14px", fontSize:13, fontWeight:700 }}>{c.ore}</span>
+                </div>
+              </div>
+            ))}
+          </Section>
+          <Section title="📍 Vie lavorate (per frequenza)">
+            {r.vieSort.map(([via,cnt])=>(
+              <div key={via} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 0", borderBottom:"1px solid #f5f5f5" }}>
+                <span style={{ fontSize:13 }}>{via}</span>
+                <span style={{ background:"#e8f4e8", color:"#1a3a2a", borderRadius:20, padding:"2px 12px", fontSize:12, fontWeight:700 }}>{cnt}x</span>
+              </div>
+            ))}
+          </Section>
+          <Section title="✅ Attività svolte (per frequenza)">
+            {r.attSort.map(([att,cnt])=>(
+              <div key={att} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 0", borderBottom:"1px solid #f5f5f5" }}>
+                <span style={{ fontSize:13 }}>{att}</span>
+                <span style={{ background:"#e8f4e8", color:"#1a3a2a", borderRadius:20, padding:"2px 12px", fontSize:12, fontWeight:700 }}>{cnt}x</span>
+              </div>
+            ))}
+          </Section>
+          {r.anomalie.length>0 && (
+            <Section title={`⚠️ Anomalie segnalate (${r.anomalie.length})`}>
+              {r.anomalie.map(row=>(
+                <div key={row.id} style={{ borderLeft:"3px solid #e67e22", paddingLeft:12, marginBottom:10 }}>
+                  <div style={{ fontSize:12, color:"#888" }}>{fmtDateShort(row.data)} · {row.capo_squadra}</div>
+                  <div style={{ fontSize:13, color:"#e67e22", marginTop:3 }}>{row.note}</div>
+                </div>
+              ))}
+            </Section>
+          )}
+          <button onClick={()=>onSendEmail(r, label, periodo)}
+            style={{ width:"100%", padding:13, background:"#2980b9", color:"white", border:"none", borderRadius:10, fontWeight:700, fontSize:14, cursor:"pointer", marginTop:4 }}>
+            📧 Invia report via email
+          </button>
+        </div>
+      );
+    }
+
     function AdminPanel({ user, onLogout }) {
       const [rows, setRows] = useState([]);
       const [loading, setLoading] = useState(true);
       const [view, setView] = useState("dashboard");
       const [selected, setSelected] = useState(null);
       const [filters, setFilters] = useState({ capo:"", data:"", via:"" });
+      const [reportPeriodo, setReportPeriodo] = useState("settimanale");
+      const [reportOffset, setReportOffset] = useState(0);
+      const [emailSent, setEmailSent] = useState(false);
 
       useEffect(() => { load(); }, []);
 
       async function load() {
         setLoading(true);
         try {
-          const r = await sb("rapportini?order=created_at.desc&limit=200");
+          const r = await sb("rapportini?order=created_at.desc&limit=500");
           const d = await r.json(); setRows(Array.isArray(d)?d:[]);
         } catch { setRows([]); }
         setLoading(false);
+      }
+
+      const range = reportPeriodo==="settimanale" ? getWeekRange(reportOffset) : getMonthRange(reportOffset);
+      const reportRows = rows.filter(r => r.data >= range.from && r.data <= range.to);
+
+      async function sendReport(rep, label, periodo) {
+        const html = `
+          <h2 style="color:#1a3a2a">📊 Report ${periodo} – Pulchra Ambiente Srl</h2>
+          <p style="color:#555;font-size:14px">Periodo: <b>${label}</b> · ${rep.total} rapportini · ${rep.oreStr} totali</p>
+          <h3 style="color:#1a3a2a">👷 Ore per capo squadra</h3>
+          <table border="0" cellpadding="6" style="font-family:sans-serif;font-size:14px;width:100%">
+            ${rep.byCapo.map(c=>`<tr><td>${c.name}</td><td>${c.count} rapportini</td><td><b>${c.ore}</b></td></tr>`).join("")}
+          </table>
+          <h3 style="color:#1a3a2a">📍 Vie lavorate</h3>
+          <table border="0" cellpadding="4" style="font-family:sans-serif;font-size:13px;width:100%">
+            ${rep.vieSort.map(([v,c])=>`<tr><td>${v}</td><td><b>${c}x</b></td></tr>`).join("")}
+          </table>
+          <h3 style="color:#1a3a2a">✅ Attività svolte</h3>
+          <table border="0" cellpadding="4" style="font-family:sans-serif;font-size:13px;width:100%">
+            ${rep.attSort.map(([a,c])=>`<tr><td>${a}</td><td><b>${c}x</b></td></tr>`).join("")}
+          </table>
+          ${rep.anomalie.length ? `<h3 style="color:#e67e22">⚠️ Anomalie (${rep.anomalie.length})</h3>
+          ${rep.anomalie.map(r=>`<p style="font-size:13px;border-left:3px solid #e67e22;padding-left:8px"><b>${fmtDateShort(r.data)} – ${r.capo_squadra}:</b> ${r.note}</p>`).join("")}` : ""}`;
+        try {
+          await fetch("/.netlify/functions/send-email", {
+            method:"POST", headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({ rapportino: { data: label, vie:[], attivita:[], mezzi:[], ore_inizio:"", ore_fine:"", note:"", foto_urls:[] }, capoName:`Report ${periodo}`, customHtml: html, subject:`📊 Report ${periodo} ${label} – Pulchra Ambiente` })
+          });
+          setEmailSent(true); setTimeout(()=>setEmailSent(false), 3000);
+        } catch(e) { alert("Errore invio email"); }
       }
 
       const filtered = rows.filter(r =>
@@ -269,13 +404,7 @@
         (!filters.data || r.data === filters.data) &&
         (!filters.via  || r.vie?.some(v=>v.toLowerCase().includes(filters.via.toLowerCase())))
       );
-
-      const totOre = filtered.reduce((acc,r) => {
-        const [h1,m1] = (r.ore_inizio||"0:0").split(":").map(Number);
-        const [h2,m2] = (r.ore_fine||"0:0").split(":").map(Number);
-        return acc + (h2*60+m2 - h1*60-m1);
-      }, 0);
-
+      const totOre = calcOre(filtered);
       const hasAnomalie = filtered.filter(r => r.note && r.note.trim() !== "").length;
       const byCapo = USERS.filter(u=>u.role==="capo").map(u=>({ name:u.name, count:rows.filter(r=>r.capo_squadra===u.name).length }));
 
@@ -284,8 +413,9 @@
       return (
         <div style={{ minHeight:"100vh", background:"#f0f2f5", fontFamily:"sans-serif" }}>
           <Header name={`Admin – ${user.name}`} view={view} setView={setView} onLogout={onLogout}
-            tabs={[{k:"dashboard",l:"📊 Dashboard"},{k:"lista",l:"📋 Rapportini"},{k:"anomalie",l:"⚠️ Anomalie"}]} />
+            tabs={[{k:"dashboard",l:"📊 Dashboard"},{k:"lista",l:"📋 Rapportini"},{k:"report",l:"📈 Report"},{k:"anomalie",l:"⚠️ Anomalie"}]} />
           <div style={{ maxWidth:900, margin:"0 auto", padding:"16px 16px 60px" }}>
+
             {view==="dashboard" && (
               <>
                 <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))", gap:12, marginBottom:16 }}>
@@ -315,6 +445,32 @@
                 </Section>
               </>
             )}
+
+            {view==="report" && (
+              <>
+                <div style={{ background:"white", borderRadius:12, padding:14, marginBottom:12, display:"flex", gap:10, flexWrap:"wrap", alignItems:"center" }}>
+                  <div style={{ display:"flex", gap:6 }}>
+                    {["settimanale","mensile"].map(p=>(
+                      <button key={p} onClick={()=>{ setReportPeriodo(p); setReportOffset(0); }}
+                        style={{ padding:"8px 16px", borderRadius:8, border:"none", background:reportPeriodo===p?"#1a3a2a":"#f0f0f0", color:reportPeriodo===p?"white":"#444", fontWeight:700, cursor:"pointer", fontSize:13 }}>
+                        {p==="settimanale"?"📅 Settimana":"📆 Mese"}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ display:"flex", gap:6, alignItems:"center", marginLeft:"auto" }}>
+                    <button onClick={()=>setReportOffset(o=>o-1)}
+                      style={{ padding:"7px 12px", borderRadius:8, border:"1px solid #ddd", background:"white", cursor:"pointer", fontSize:14 }}>←</button>
+                    <span style={{ fontSize:13, fontWeight:600, minWidth:180, textAlign:"center" }}>{range.label}</span>
+                    <button onClick={()=>setReportOffset(o=>o+1)}
+                      style={{ padding:"7px 12px", borderRadius:8, border:"1px solid #ddd", background:"white", cursor:"pointer", fontSize:14 }}>→</button>
+                  </div>
+                </div>
+                {emailSent && <div style={{ background:"#d4edda", color:"#155724", borderRadius:8, padding:12, marginBottom:12, fontSize:13 }}>✅ Report inviato via email!</div>}
+                {loading ? <div style={{ textAlign:"center", padding:40, color:"#888" }}>⏳ Caricamento...</div>
+                  : <ReportView rows={reportRows} periodo={reportPeriodo} label={range.label} onSendEmail={sendReport} />}
+              </>
+            )}
+
             {view==="lista" && (
               <>
                 <div style={{ background:"white", borderRadius:12, padding:14, marginBottom:12, display:"flex", gap:10, flexWrap:"wrap" }}>
@@ -332,6 +488,7 @@
                   : filtered.map(r=><RowCard key={r.id} r={r} onClick={()=>setSelected(r)} />)}
               </>
             )}
+
             {view==="anomalie" && (
               <>
                 <div style={{ background:"#fff8e1", border:"1px solid #f9ca24", borderRadius:12, padding:14, marginBottom:14, fontSize:14, color:"#856404" }}>
