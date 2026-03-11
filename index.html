@@ -114,7 +114,7 @@
     }
 
     function RapportinoForm({ user, onLogout }) {
-      const [form, setForm] = useState({ vie:[], attivita:[], oreInizio:"06:00", oreFine:"12:00", mezzi:[], note:"", fotoFiles:[], fotoPreview:[] });
+      const [form, setForm] = useState({ vie:[], attivita:[], oreInizio:"06:00", oreFine:"12:00", mezzi:[], collega:"", note:"", fotoFiles:[], fotoPreview:[] });
       const [status, setStatus] = useState("idle");
       const [view, setView] = useState("form");
       const [miei, setMiei] = useState([]);
@@ -149,7 +149,7 @@
             capo_squadra: user.name,
             vie: form.vie, attivita: form.attivita,
             ore_inizio: form.oreInizio, ore_fine: form.oreFine,
-            mezzi: form.mezzi, note: form.note, foto_urls: []
+            mezzi: form.mezzi, note: form.note, collega: form.collega, foto_urls: []
           };
           const res = await sb("rapportini", { method:"POST", body:JSON.stringify(record) });
           const [saved] = await res.json();
@@ -228,6 +228,11 @@
                       ))}
                     </div>
                   )}
+                </Section>
+                <Section title="👥 Collega affiancato (opzionale)">
+                  <input value={form.collega} onChange={e=>setForm(f=>({...f,collega:e.target.value}))}
+                    placeholder="Nome e cognome del collega (se presente)..."
+                    style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1.5px solid #ddd", fontSize:14, boxSizing:"border-box" }} />
                 </Section>
                 <Section title="⚠️ Note / Anomalie">
                   <textarea value={form.note} onChange={e=>setForm(f=>({...f,note:e.target.value}))}
