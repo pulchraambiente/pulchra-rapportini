@@ -7,9 +7,9 @@ exports.handler = async (event) => {
   const EMAIL_RESP = "luca@pulchrambiente.it";
 
   try {
-    const { rapportino, capoName } = JSON.parse(event.body);
+    const { rapportino, capoName, customHtml, subject: customSubject } = JSON.parse(event.body);
 
-    const html = `
+    const html = customHtml || `
       <h2 style="color:#1a3a2a">📋 Nuovo Rapportino – Pulchra Ambiente Srl</h2>
       <table border="0" cellpadding="6" style="font-family:sans-serif;font-size:14px">
         <tr><td><b>Data</b></td><td>${rapportino.data}</td></tr>
@@ -21,6 +21,7 @@ exports.handler = async (event) => {
         <tr><td><b>Note/Anomalie</b></td><td>${rapportino.note || "–"}</td></tr>
         <tr><td><b>Foto allegate</b></td><td>${rapportino.foto_urls?.length || 0}</td></tr>
       </table>`;
+    const subject = customSubject || `📋 Rapportino ${rapportino.data} – ${capoName}`;
 
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -31,7 +32,7 @@ exports.handler = async (event) => {
       body: JSON.stringify({
         from: "Pulchra Ambiente <onboarding@resend.dev>",
         to: [EMAIL_RESP],
-        subject: `📋 Rapportino ${rapportino.data} – ${capoName}`,
+        subject: subject,
         html: html
       })
     });
