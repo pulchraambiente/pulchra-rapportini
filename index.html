@@ -14,13 +14,8 @@
   <script type="text/babel">
     const { useState, useRef, useEffect } = React;
 
-    // ─── CONFIG ───────────────────────────────────────────────────────────────
     const SUPABASE_URL  = "https://kagscxeopvhsjlupvxem.supabase.co";
     const SUPABASE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImthZ3NjeGVvcHZoc2psdXB2eGVtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMxNTg0OTIsImV4cCI6MjA4ODczNDQ5Mn0.gsVaedf25JWqTmGNpjmgDwuxgnmhBrnQk7qPc4KXfaA";
-    const RESEND_KEY    = "re_ASL5GDiu_5AWTKvNtiw8bjQLhvwtCP5wx";
-    const EMAIL_FROM    = "onboarding@resend.dev";
-    const EMAIL_RESP    = "luca@pulchrambiente.it";
-    // ─────────────────────────────────────────────────────────────────────────
 
     const USERS = [
       { username:"antonio.valentini", password:"pulchra2026", name:"Antonio Valentini", role:"capo" },
@@ -50,12 +45,11 @@
       ...opts
     });
 
-    async function sendEmail(rapportino, capoName) {
+    async function sendEmail(rapportino, capoName, customHtml, customSubject) {
       try {
         await fetch("/.netlify/functions/send-email", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ rapportino, capoName })
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ rapportino, capoName, customHtml, subject: customSubject })
         });
       } catch(e) { console.warn("Email:", e); }
     }
@@ -75,6 +69,54 @@
     const fmtDate = () => new Date().toLocaleDateString("it-IT",{weekday:"long",day:"2-digit",month:"long",year:"numeric"});
     const fmtDateShort = d => new Date(d).toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric"});
 
+    function calcOre(rows) {
+      return rows.reduce((acc,r) => {
+        const [h1,m1] = (r.ore_inizio||"0:0").split(":").map(Number);
+        const [h2,m2] = (r.ore_fine||"0:0").split(":").map(Number);
+        return acc + (h2*60+m2 - h1*60-m1);
+      }, 0);
+    }
+
+    function getWeekRange(offset=0) {
+      const now = new Date();
+      const day = now.getDay()||7;
+      const mon = new Date(now); mon.setDate(now.getDate()-day+1+offset*7);
+      const sun = new Date(mon); sun.setDate(mon.getDate()+6);
+      return {
+        from: mon.toISOString().split("T")[0],
+        to: sun.toISOString().split("T")[0],
+        label: `${mon.toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit"})} – ${sun.toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric"})}`
+      };
+    }
+
+    function getMonthRange(offset=0) {
+      const now = new Date();
+      const y = now.getFullYear(), m = now.getMonth()+offset;
+      const from = new Date(y,m,1).toISOString().split("T")[0];
+      const to   = new Date(y,m+1,0).toISOString().split("T")[0];
+      const label = new Date(y,m,1).toLocaleDateString("it-IT",{month:"long",year:"numeric"});
+      return { from, to, label };
+    }
+
+    function buildReport(rows) {
+      const oreMin = calcOre(rows);
+      const oreStr = `${Math.floor(oreMin/60)}h ${oreMin%60}m`;
+      const byCapo = USERS.filter(u=>u.role==="capo").map(u=>{
+        const sub = rows.filter(r=>r.capo_squadra===u.name);
+        const min = calcOre(sub);
+        return { name:u.name, count:sub.length, ore:`${Math.floor(min/60)}h ${min%60}m` };
+      });
+      const vieCount = {};
+      rows.forEach(r=>r.vie?.forEach(v=>{ vieCount[v]=(vieCount[v]||0)+1; }));
+      const vieSort = Object.entries(vieCount).sort((a,b)=>b[1]-a[1]);
+      const attCount = {};
+      rows.forEach(r=>r.attivita?.forEach(a=>{ attCount[a]=(attCount[a]||0)+1; }));
+      const attSort = Object.entries(attCount).sort((a,b)=>b[1]-a[1]);
+      const anomalie = rows.filter(r=>r.note&&r.note.trim()!=="");
+      return { oreStr, byCapo, vieSort, attSort, anomalie, total:rows.length };
+    }
+
+    // ── APP ──────────────────────────────────────────────────────────────────
     function App() {
       const [user, setUser] = useState(null);
       const [login, setLogin] = useState({ u:"", p:"", err:"" });
@@ -88,6 +130,7 @@
       return <RapportinoForm user={user} onLogout={()=>setUser(null)} />;
     }
 
+    // ── LOGIN ────────────────────────────────────────────────────────────────
     function LoginScreen({ login, setLogin, doLogin }) {
       return (
         <div style={{ minHeight:"100vh", background:"linear-gradient(135deg,#1a3a2a,#2d6a4f)", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"sans-serif" }}>
@@ -113,8 +156,12 @@
       );
     }
 
+    // ── FORM RAPPORTINO ──────────────────────────────────────────────────────
     function RapportinoForm({ user, onLogout }) {
-      const [form, setForm] = useState({ vie:[], attivita:[], oreInizio:"06:00", oreFine:"12:00", mezzi:[], collega:"", note:"", fotoFiles:[], fotoPreview:[] });
+      const [form, setForm] = useState({
+        vie:[], attivita:[], oreInizio:"06:00", oreFine:"12:00",
+        mezzi:[], collega:"", note:"", fotoFiles:[], fotoPreview:[]
+      });
       const [status, setStatus] = useState("idle");
       const [view, setView] = useState("form");
       const [miei, setMiei] = useState([]);
@@ -147,9 +194,10 @@
           const record = {
             data: new Date().toISOString().split("T")[0],
             capo_squadra: user.name,
+            collega: form.collega,
             vie: form.vie, attivita: form.attivita,
             ore_inizio: form.oreInizio, ore_fine: form.oreFine,
-            mezzi: form.mezzi, note: form.note, collega: form.collega, foto_urls: []
+            mezzi: form.mezzi, note: form.note, foto_urls: []
           };
           const res = await sb("rapportini", { method:"POST", body:JSON.stringify(record) });
           const [saved] = await res.json();
@@ -160,7 +208,7 @@
           }
           await sendEmail(record, user.name);
           setStatus("done");
-          setForm({ vie:[], attivita:[], oreInizio:"06:00", oreFine:"12:00", mezzi:[], note:"", fotoFiles:[], fotoPreview:[] });
+          setForm({ vie:[], attivita:[], oreInizio:"06:00", oreFine:"12:00", mezzi:[], collega:"", note:"", fotoFiles:[], fotoPreview:[] });
         } catch(e) { console.error(e); setStatus("error"); }
       }
 
@@ -177,16 +225,19 @@
 
       return (
         <div style={{ minHeight:"100vh", background:"#f4f6f3", fontFamily:"sans-serif" }}>
-          <Header name={user.name} view={view} setView={setView} onLogout={onLogout} tabs={[{k:"form",l:"📋 Rapportino"},{k:"storico",l:"📂 I miei"}]} />
+          <Header name={user.name} view={view} setView={setView} onLogout={onLogout}
+            tabs={[{k:"form",l:"📋 Rapportino"},{k:"storico",l:"📂 I miei"}]} />
           <div style={{ maxWidth:600, margin:"0 auto", padding:"16px 16px 60px" }}>
             {view==="storico" ? <Storico rows={miei} /> : (
               <>
                 <Card><b style={{color:"#1a3a2a"}}>📅 {fmtDate()}</b> · 👷 {user.name}</Card>
+
                 <Section title="📍 Vie / Zone lavorate">
                   <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
                     {VIE.map(v=><Chip key={v} label={v} active={form.vie.includes(v)} onClick={()=>toggle("vie",v)} />)}
                   </div>
                 </Section>
+
                 <Section title="✅ Attività svolte">
                   {ATTIVITA.map(a=>(
                     <label key={a} style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10, cursor:"pointer" }}>
@@ -195,6 +246,7 @@
                     </label>
                   ))}
                 </Section>
+
                 <Section title="⏰ Ore di lavoro">
                   <div style={{ display:"flex", gap:12 }}>
                     {[["oreInizio","Inizio"],["oreFine","Fine"]].map(([k,l])=>(
@@ -206,11 +258,13 @@
                     ))}
                   </div>
                 </Section>
+
                 <Section title="🚛 Mezzi utilizzati">
                   <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
                     {MEZZI.map(m=><Chip key={m} label={m} active={form.mezzi.includes(m)} onClick={()=>toggle("mezzi",m)} />)}
                   </div>
                 </Section>
+
                 <Section title="📷 Foto allegate">
                   <button onClick={()=>fileRef.current.click()}
                     style={{ padding:"9px 16px", background:"#f0f4f0", border:"2px dashed #aac4aa", borderRadius:8, cursor:"pointer", color:"#1a3a2a", fontWeight:600, fontSize:13 }}>
@@ -229,17 +283,21 @@
                     </div>
                   )}
                 </Section>
+
                 <Section title="👥 Collega affiancato (opzionale)">
                   <input value={form.collega} onChange={e=>setForm(f=>({...f,collega:e.target.value}))}
-                    placeholder="Nome e cognome del collega (se presente)..."
-                    style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1.5px solid #ddd", fontSize:14, boxSizing:"border-box" }} />
+                    placeholder="Nome del collega affiancato..."
+                    style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1.5px solid #ddd", fontSize:14 }} />
                 </Section>
+
                 <Section title="⚠️ Note / Anomalie">
                   <textarea value={form.note} onChange={e=>setForm(f=>({...f,note:e.target.value}))}
                     placeholder="Descrivi eventuali problemi, anomalie o osservazioni..."
                     rows={3} style={{ width:"100%", padding:"10px 12px", borderRadius:8, border:"1.5px solid #ddd", fontSize:14, resize:"vertical", fontFamily:"sans-serif" }} />
                 </Section>
+
                 {status==="error" && <div style={{ background:"#fdecea", color:"#c0392b", borderRadius:8, padding:12, marginBottom:12, fontSize:13 }}>⚠️ Errore durante l'invio. Controlla la connessione.</div>}
+
                 <button onClick={submit} disabled={status==="sending"}
                   style={{ width:"100%", padding:15, background:status==="sending"?"#aaa":"#1a3a2a", color:"white", border:"none", borderRadius:12, fontWeight:700, fontSize:16, cursor:status==="sending"?"not-allowed":"pointer" }}>
                   {status==="sending" ? "⏳ Invio in corso..." : "📤 Invia Rapportino"}
@@ -251,116 +309,15 @@
       );
     }
 
-    function calcOre(rows) {
-      return rows.reduce((acc,r) => {
-        const [h1,m1] = (r.ore_inizio||"0:0").split(":").map(Number);
-        const [h2,m2] = (r.ore_fine||"0:0").split(":").map(Number);
-        return acc + (h2*60+m2 - h1*60-m1);
-      }, 0);
-    }
-
-    function getWeekRange(offset=0) {
-      const now = new Date();
-      const day = now.getDay()||7;
-      const mon = new Date(now); mon.setDate(now.getDate()-day+1+offset*7);
-      const sun = new Date(mon); sun.setDate(mon.getDate()+6);
-      return { from: mon.toISOString().split("T")[0], to: sun.toISOString().split("T")[0],
-        label: `${mon.toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit"})} – ${sun.toLocaleDateString("it-IT",{day:"2-digit",month:"2-digit",year:"numeric"})}` };
-    }
-
-    function getMonthRange(offset=0) {
-      const now = new Date();
-      const y = now.getFullYear(), m = now.getMonth()+offset;
-      const from = new Date(y, m, 1).toISOString().split("T")[0];
-      const to   = new Date(y, m+1, 0).toISOString().split("T")[0];
-      const label = new Date(y,m,1).toLocaleDateString("it-IT",{month:"long",year:"numeric"});
-      return { from, to, label };
-    }
-
-    function buildReport(rows) {
-      const oreMin = calcOre(rows);
-      const oreStr = `${Math.floor(oreMin/60)}h ${oreMin%60}m`;
-      const byCapo = USERS.filter(u=>u.role==="capo").map(u=>{
-        const sub = rows.filter(r=>r.capo_squadra===u.name);
-        const min = calcOre(sub);
-        return { name:u.name, count:sub.length, ore:`${Math.floor(min/60)}h ${min%60}m` };
-      });
-      const vieCount = {};
-      rows.forEach(r=>r.vie?.forEach(v=>{ vieCount[v]=(vieCount[v]||0)+1; }));
-      const vieSort = Object.entries(vieCount).sort((a,b)=>b[1]-a[1]);
-      const attCount = {};
-      rows.forEach(r=>r.attivita?.forEach(a=>{ attCount[a]=(attCount[a]||0)+1; }));
-      const attSort = Object.entries(attCount).sort((a,b)=>b[1]-a[1]);
-      const anomalie = rows.filter(r=>r.note&&r.note.trim()!=="");
-      return { oreStr, byCapo, vieSort, attSort, anomalie, total:rows.length };
-    }
-
-    function ReportView({ rows, periodo, label, onSendEmail }) {
-      const r = buildReport(rows);
-      if (!rows.length) return (
-        <div style={{ background:"white", borderRadius:12, padding:24, textAlign:"center", color:"#999" }}>
-          Nessun rapportino nel periodo selezionato.
-        </div>
-      );
-      return (
-        <div>
-          <div style={{ background:"#1a3a2a", color:"white", borderRadius:12, padding:16, marginBottom:12 }}>
-            <div style={{ fontWeight:800, fontSize:16 }}>📊 Report {periodo} — {label}</div>
-            <div style={{ fontSize:13, opacity:.8, marginTop:4 }}>{r.total} rapportini · {r.oreStr} totali</div>
-          </div>
-          <Section title="👷 Ore per capo squadra">
-            {r.byCapo.map(c=>(
-              <div key={c.name} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 0", borderBottom:"1px solid #f5f5f5" }}>
-                <span style={{ fontSize:14 }}>👤 {c.name}</span>
-                <div style={{ display:"flex", gap:10, alignItems:"center" }}>
-                  <span style={{ fontSize:13, color:"#888" }}>{c.count} rapportini</span>
-                  <span style={{ background:"#1a3a2a", color:"white", borderRadius:20, padding:"3px 14px", fontSize:13, fontWeight:700 }}>{c.ore}</span>
-                </div>
-              </div>
-            ))}
-          </Section>
-          <Section title="📍 Vie lavorate (per frequenza)">
-            {r.vieSort.map(([via,cnt])=>(
-              <div key={via} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 0", borderBottom:"1px solid #f5f5f5" }}>
-                <span style={{ fontSize:13 }}>{via}</span>
-                <span style={{ background:"#e8f4e8", color:"#1a3a2a", borderRadius:20, padding:"2px 12px", fontSize:12, fontWeight:700 }}>{cnt}x</span>
-              </div>
-            ))}
-          </Section>
-          <Section title="✅ Attività svolte (per frequenza)">
-            {r.attSort.map(([att,cnt])=>(
-              <div key={att} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 0", borderBottom:"1px solid #f5f5f5" }}>
-                <span style={{ fontSize:13 }}>{att}</span>
-                <span style={{ background:"#e8f4e8", color:"#1a3a2a", borderRadius:20, padding:"2px 12px", fontSize:12, fontWeight:700 }}>{cnt}x</span>
-              </div>
-            ))}
-          </Section>
-          {r.anomalie.length>0 && (
-            <Section title={`⚠️ Anomalie segnalate (${r.anomalie.length})`}>
-              {r.anomalie.map(row=>(
-                <div key={row.id} style={{ borderLeft:"3px solid #e67e22", paddingLeft:12, marginBottom:10 }}>
-                  <div style={{ fontSize:12, color:"#888" }}>{fmtDateShort(row.data)} · {row.capo_squadra}</div>
-                  <div style={{ fontSize:13, color:"#e67e22", marginTop:3 }}>{row.note}</div>
-                </div>
-              ))}
-            </Section>
-          )}
-          <button onClick={()=>onSendEmail(r, label, periodo)}
-            style={{ width:"100%", padding:13, background:"#2980b9", color:"white", border:"none", borderRadius:10, fontWeight:700, fontSize:14, cursor:"pointer", marginTop:4 }}>
-            📧 Invia report via email
-          </button>
-        </div>
-      );
-    }
-
+    // ── ADMIN ────────────────────────────────────────────────────────────────
     function AdminPanel({ user, onLogout }) {
-      const [rows, setRows] = useState([]);
+      const [rows, setRows]       = useState([]);
       const [loading, setLoading] = useState(true);
-      const [view, setView] = useState("dashboard");
+      const [view, setView]       = useState("dashboard");
       const [selected, setSelected] = useState(null);
       const [filters, setFilters] = useState({ capo:"", data:"", via:"" });
       const [reportPeriodo, setReportPeriodo] = useState("settimanale");
-      const [reportOffset, setReportOffset] = useState(0);
+      const [reportOffset, setReportOffset]   = useState(0);
       const [emailSent, setEmailSent] = useState(false);
 
       useEffect(() => { load(); }, []);
@@ -377,29 +334,27 @@
       const range = reportPeriodo==="settimanale" ? getWeekRange(reportOffset) : getMonthRange(reportOffset);
       const reportRows = rows.filter(r => r.data >= range.from && r.data <= range.to);
 
-      async function sendReport(rep, label, periodo) {
+      async function inviaReport(rep, label, periodo) {
         const html = `
           <h2 style="color:#1a3a2a">📊 Report ${periodo} – Pulchra Ambiente Srl</h2>
           <p style="color:#555;font-size:14px">Periodo: <b>${label}</b> · ${rep.total} rapportini · ${rep.oreStr} totali</p>
-          <h3 style="color:#1a3a2a">👷 Ore per capo squadra</h3>
+          <h3 style="color:#1a3a2a;margin-top:16px">👷 Ore per capo squadra</h3>
           <table border="0" cellpadding="6" style="font-family:sans-serif;font-size:14px;width:100%">
             ${rep.byCapo.map(c=>`<tr><td>${c.name}</td><td>${c.count} rapportini</td><td><b>${c.ore}</b></td></tr>`).join("")}
           </table>
-          <h3 style="color:#1a3a2a">📍 Vie lavorate</h3>
+          <h3 style="color:#1a3a2a;margin-top:16px">📍 Vie lavorate</h3>
           <table border="0" cellpadding="4" style="font-family:sans-serif;font-size:13px;width:100%">
             ${rep.vieSort.map(([v,c])=>`<tr><td>${v}</td><td><b>${c}x</b></td></tr>`).join("")}
           </table>
-          <h3 style="color:#1a3a2a">✅ Attività svolte</h3>
+          <h3 style="color:#1a3a2a;margin-top:16px">✅ Attività svolte</h3>
           <table border="0" cellpadding="4" style="font-family:sans-serif;font-size:13px;width:100%">
             ${rep.attSort.map(([a,c])=>`<tr><td>${a}</td><td><b>${c}x</b></td></tr>`).join("")}
           </table>
-          ${rep.anomalie.length ? `<h3 style="color:#e67e22">⚠️ Anomalie (${rep.anomalie.length})</h3>
+          ${rep.anomalie.length ? `<h3 style="color:#e67e22;margin-top:16px">⚠️ Anomalie (${rep.anomalie.length})</h3>
           ${rep.anomalie.map(r=>`<p style="font-size:13px;border-left:3px solid #e67e22;padding-left:8px"><b>${fmtDateShort(r.data)} – ${r.capo_squadra}:</b> ${r.note}</p>`).join("")}` : ""}`;
         try {
-          await fetch("/.netlify/functions/send-email", {
-            method:"POST", headers:{"Content-Type":"application/json"},
-            body: JSON.stringify({ rapportino: { data: label, vie:[], attivita:[], mezzi:[], ore_inizio:"", ore_fine:"", note:"", foto_urls:[] }, capoName:`Report ${periodo}`, customHtml: html, subject:`📊 Report ${periodo} ${label} – Pulchra Ambiente` })
-          });
+          await sendEmail({ data:label, vie:[], attivita:[], mezzi:[], ore_inizio:"", ore_fine:"", note:"", foto_urls:[] },
+            `Report ${periodo}`, html, `📊 Report ${periodo} ${label} – Pulchra Ambiente`);
           setEmailSent(true); setTimeout(()=>setEmailSent(false), 3000);
         } catch(e) { alert("Errore invio email"); }
       }
@@ -464,15 +419,69 @@
                   </div>
                   <div style={{ display:"flex", gap:6, alignItems:"center", marginLeft:"auto" }}>
                     <button onClick={()=>setReportOffset(o=>o-1)}
-                      style={{ padding:"7px 12px", borderRadius:8, border:"1px solid #ddd", background:"white", cursor:"pointer", fontSize:14 }}>←</button>
+                      style={{ padding:"7px 12px", borderRadius:8, border:"1px solid #ddd", background:"white", cursor:"pointer" }}>←</button>
                     <span style={{ fontSize:13, fontWeight:600, minWidth:180, textAlign:"center" }}>{range.label}</span>
                     <button onClick={()=>setReportOffset(o=>o+1)}
-                      style={{ padding:"7px 12px", borderRadius:8, border:"1px solid #ddd", background:"white", cursor:"pointer", fontSize:14 }}>→</button>
+                      style={{ padding:"7px 12px", borderRadius:8, border:"1px solid #ddd", background:"white", cursor:"pointer" }}>→</button>
                   </div>
                 </div>
                 {emailSent && <div style={{ background:"#d4edda", color:"#155724", borderRadius:8, padding:12, marginBottom:12, fontSize:13 }}>✅ Report inviato via email!</div>}
                 {loading ? <div style={{ textAlign:"center", padding:40, color:"#888" }}>⏳ Caricamento...</div>
-                  : <ReportView rows={reportRows} periodo={reportPeriodo} label={range.label} onSendEmail={sendReport} />}
+                  : reportRows.length===0
+                    ? <div style={{ background:"white", borderRadius:12, padding:24, textAlign:"center", color:"#999" }}>Nessun rapportino nel periodo selezionato.</div>
+                    : (() => {
+                        const rep = buildReport(reportRows);
+                        return (
+                          <div>
+                            <div style={{ background:"#1a3a2a", color:"white", borderRadius:12, padding:16, marginBottom:12 }}>
+                              <div style={{ fontWeight:800, fontSize:16 }}>📊 Report {reportPeriodo} — {range.label}</div>
+                              <div style={{ fontSize:13, opacity:.8, marginTop:4 }}>{rep.total} rapportini · {rep.oreStr} totali</div>
+                            </div>
+                            <Section title="👷 Ore per capo squadra">
+                              {rep.byCapo.map(c=>(
+                                <div key={c.name} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"10px 0", borderBottom:"1px solid #f5f5f5" }}>
+                                  <span style={{ fontSize:14 }}>👤 {c.name}</span>
+                                  <div style={{ display:"flex", gap:10, alignItems:"center" }}>
+                                    <span style={{ fontSize:13, color:"#888" }}>{c.count} rapportini</span>
+                                    <span style={{ background:"#1a3a2a", color:"white", borderRadius:20, padding:"3px 14px", fontSize:13, fontWeight:700 }}>{c.ore}</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </Section>
+                            <Section title="📍 Vie lavorate (per frequenza)">
+                              {rep.vieSort.map(([via,cnt])=>(
+                                <div key={via} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 0", borderBottom:"1px solid #f5f5f5" }}>
+                                  <span style={{ fontSize:13 }}>{via}</span>
+                                  <span style={{ background:"#e8f4e8", color:"#1a3a2a", borderRadius:20, padding:"2px 12px", fontSize:12, fontWeight:700 }}>{cnt}x</span>
+                                </div>
+                              ))}
+                            </Section>
+                            <Section title="✅ Attività svolte (per frequenza)">
+                              {rep.attSort.map(([att,cnt])=>(
+                                <div key={att} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 0", borderBottom:"1px solid #f5f5f5" }}>
+                                  <span style={{ fontSize:13 }}>{att}</span>
+                                  <span style={{ background:"#e8f4e8", color:"#1a3a2a", borderRadius:20, padding:"2px 12px", fontSize:12, fontWeight:700 }}>{cnt}x</span>
+                                </div>
+                              ))}
+                            </Section>
+                            {rep.anomalie.length>0 && (
+                              <Section title={`⚠️ Anomalie segnalate (${rep.anomalie.length})`}>
+                                {rep.anomalie.map(row=>(
+                                  <div key={row.id} style={{ borderLeft:"3px solid #e67e22", paddingLeft:12, marginBottom:10 }}>
+                                    <div style={{ fontSize:12, color:"#888" }}>{fmtDateShort(row.data)} · {row.capo_squadra}</div>
+                                    <div style={{ fontSize:13, color:"#e67e22", marginTop:3 }}>{row.note}</div>
+                                  </div>
+                                ))}
+                              </Section>
+                            )}
+                            <button onClick={()=>inviaReport(rep, range.label, reportPeriodo)}
+                              style={{ width:"100%", padding:13, background:"#2980b9", color:"white", border:"none", borderRadius:10, fontWeight:700, fontSize:14, cursor:"pointer", marginTop:4 }}>
+                              📧 Invia report via email
+                            </button>
+                          </div>
+                        );
+                      })()
+                }
               </>
             )}
 
@@ -515,6 +524,7 @@
       );
     }
 
+    // ── DETTAGLIO ────────────────────────────────────────────────────────────
     function DettaglioRapportino({ r, onBack }) {
       return (
         <div style={{ minHeight:"100vh", background:"#f0f2f5", fontFamily:"sans-serif" }}>
@@ -526,6 +536,7 @@
             {[
               ["📅 Data", fmtDateShort(r.data)],
               ["👷 Capo Squadra", r.capo_squadra],
+              ["👥 Collega affiancato", r.collega||"–"],
               ["⏰ Orario", `${r.ore_inizio} – ${r.ore_fine}`],
               ["📍 Vie lavorate", r.vie?.join(", ")],
               ["✅ Attività", r.attivita?.join(" · ")],
@@ -553,6 +564,7 @@
       );
     }
 
+    // ── STORICO ──────────────────────────────────────────────────────────────
     function Storico({ rows }) {
       return rows.length===0
         ? <div style={{ background:"white", borderRadius:12, padding:24, textAlign:"center", color:"#999" }}>Nessun rapportino ancora.</div>
@@ -566,7 +578,7 @@
             <strong style={{ color:"#1a3a2a", fontSize:14 }}>{fmtDateShort(r.data)}</strong>
             <span style={{ fontSize:12, color:"#888" }}>{r.ore_inizio}–{r.ore_fine}</span>
           </div>
-          <div style={{ fontSize:13, color:"#555" }}>👤 {r.capo_squadra}</div>
+          <div style={{ fontSize:13, color:"#555" }}>👤 {r.capo_squadra}{r.collega ? ` · 👥 ${r.collega}` : ""}</div>
           <div style={{ fontSize:13, color:"#555", marginTop:3 }}>📍 {r.vie?.slice(0,3).join(", ")}{r.vie?.length>3?` +${r.vie.length-3}`:""}</div>
           {r.note && <div style={{ fontSize:13, color:"#e67e22", marginTop:4 }}>⚠️ {r.note}</div>}
           {r.foto_urls?.length>0 && <div style={{ fontSize:12, color:"#888", marginTop:4 }}>📷 {r.foto_urls.length} foto</div>}
@@ -574,6 +586,7 @@
       );
     }
 
+    // ── SHARED ───────────────────────────────────────────────────────────────
     function Header({ name, view, setView, onLogout, tabs }) {
       return (
         <div style={{ background:"#1a3a2a", color:"white", padding:"12px 16px", fontFamily:"sans-serif" }}>
@@ -582,14 +595,14 @@
               <div style={{ fontWeight:700, fontSize:15 }}>🌿 Pulchra Ambiente</div>
               <div style={{ fontSize:11, opacity:.7 }}>{name}</div>
             </div>
-            <div style={{ display:"flex", gap:8, alignItems:"center" }}>
+            <div style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap" }}>
               {tabs.map(t=>(
                 <button key={t.k} onClick={()=>setView(t.k)}
-                  style={{ background:view===t.k?"rgba(255,255,255,.2)":"transparent", color:"white", border:"1px solid rgba(255,255,255,.25)", borderRadius:7, padding:"6px 11px", cursor:"pointer", fontSize:12, fontWeight:view===t.k?700:400 }}>
+                  style={{ background:view===t.k?"rgba(255,255,255,.2)":"transparent", color:"white", border:"1px solid rgba(255,255,255,.25)", borderRadius:7, padding:"6px 10px", cursor:"pointer", fontSize:11, fontWeight:view===t.k?700:400 }}>
                   {t.l}
                 </button>
               ))}
-              <button onClick={onLogout} style={{ background:"transparent", color:"white", border:"1px solid rgba(255,255,255,.25)", borderRadius:7, padding:"6px 10px", cursor:"pointer", fontSize:12 }}>Esci</button>
+              <button onClick={onLogout} style={{ background:"transparent", color:"white", border:"1px solid rgba(255,255,255,.25)", borderRadius:7, padding:"6px 10px", cursor:"pointer", fontSize:11 }}>Esci</button>
             </div>
           </div>
         </div>
